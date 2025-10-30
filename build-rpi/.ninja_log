@@ -1,0 +1,4 @@
+# ninja log v5
+6	48	1761792577492503800	CMakeFiles/rpi_tests.dir/tests/test_main.c.o	89ad026b7b1472f9
+5	58	1761792577497503800	CMakeFiles/rpi_demo.dir/src/main.c.o	b3e378d40d2c5310
+64	250	1761792577695505900	rpi_demo	3ac2c775887a1305

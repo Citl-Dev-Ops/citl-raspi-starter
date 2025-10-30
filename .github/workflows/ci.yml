@@ -1,0 +1,23 @@
+﻿name: build-test-armhf
+on:
+  push: { branches: [ main ] }
+  pull_request:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build \
+            gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf qemu-user-static
+      - name: Configure (ARMHF)
+        run: cmake -S . -B build-rpi -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/armhf.cmake -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-rpi -j2
+      - name: Run tests under QEMU
+        run: qemu-arm-static -L /usr/arm-linux-gnueabihf build-rpi/rpi_tests
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpi_demo_armhf
+          path: build-rpi/rpi_demo
