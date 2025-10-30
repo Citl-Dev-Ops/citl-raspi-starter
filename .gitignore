@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+.DS_Store
+
+# Large assets & generated files
+assets/*.gguf
+assets/**/*.gguf
+assets/piper/*.onnx
+assets/piper/*.onnx.json
+assets/vosk-model-*/
+hello_class.wav
+*.zip *.tar *.tar.gz *.xz
