@@ -1,448 +1,286 @@
-Windows dev → CanaKit deployment guide (TinyLlama + Piper TTS + Vosk STT)
-A. One-time: get the repo & Visual Studio set up
-A1) Clone the repo
+citl-raspi-starter
 
-Use one of these (pick just one).
+Offline, classroom-ready AI on a Raspberry Pi (CanaKit) using TinyLlama + Vosk + Piper.
+This repo gives you a consistent, reproducible way to build small, real-world assistive apps (TTS, captions, translation, Q&A) that run fully on-device.
 
-Option 1 — GitHub Desktop
+Why this kit (in plain English)
 
-Open GitHub Desktop → File → Clone repository…
+CanaKit? A boxed Raspberry Pi bundle with the board, power, case/cooling, microSD, and cables. Same parts every time → fewer “works on my machine” headaches.
 
-URL: https://github.com/Citl-Dev-Ops/citl-raspi-starter.git
+OS we target: Raspberry Pi OS 64-bit (Bookworm) — the official arm64 distro with the best hardware support.
 
-Choose a local folder → Clone.
+Why TinyLlama: A ~1.1B parameter instruction-tuned model that actually runs well on CPU when quantized (GGUF). It’s fast enough, small enough, and private (offline).
 
-Option 2 — Visual Studio 2022
+The offline stack:
+Vosk (STT) → TinyLlama (LLM) → Piper (TTS) = low-latency, no cloud, classroom-safe.
 
-Launch Visual Studio 2022.
+What you can build (finished examples you can demo)
 
-Start Window → Clone a repository.
+Live Captions on the Pi: microphone → Vosk captions in a terminal or on a kiosk screen.
 
-Repository location: https://github.com/Citl-Dev-Ops/citl-raspi-starter.git
+“Ask the Lab” voice assistant: speak a question → TinyLlama answers → Piper speaks back.
 
-Clone.
+Simple on-device translation: speak English → text → translate (Argos) → Piper speaks Spanish.
 
-Option 3 — PowerShell
+Reading aid / text simplifier: take a paragraph → simplify wording → read aloud via Piper.
 
+How we measure success (program-friendly):
+
+Time to first successful TTS and STT (<10 minutes on a fresh kit).
+
+End-to-end latency (mic → voice reply) under ~4 seconds for short prompts.
+
+Completely offline operation (disconnect Wi-Fi and still run).
+
+Uptime in a 30–60 minute classroom block without overheating (with CanaKit cooling).
+
+Hardware you’ll see in the CanaKit
+
+Raspberry Pi 4 (4–8 GB) or 5 (4–8 GB)
+
+Case + fan/heat sinks, 5V power supply
+
+32–128 GB microSD
+
+HDMI cable; optional USB mic/speaker
+
+Tip: USB speakerphone “all-in-one” units make classroom audio painless.
+
+Architecture (one glance)
+Mic  -->  Vosk (STT)   -->  TinyLlama (LLM)  -->  Piper (TTS)  --> Speaker
+           text out             text in           speech out
+
+Verify your Pi’s OS (on the device)
+cat /etc/os-release         # Expect Debian Bookworm
+uname -m                    # Expect aarch64 (64-bit)
+
+
+If you see armv7l, reflash with Raspberry Pi OS (64-bit).
+
+Quick Start — Windows (PowerShell)
+
+These steps assume you’ll use Python from Microsoft Store (domain-friendly) and PowerShell. No SSH. Copy/paste exactly.
+
+# 1) Get the code (HTTPS only)
 git clone https://github.com/Citl-Dev-Ops/citl-raspi-starter.git
 cd citl-raspi-starter
 
-A2) Visual Studio workloads (for C/C++ apps)
+# 2) Create and activate a virtual environment
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 
-Install once (skip if already done):
-
-Start Menu → Visual Studio Installer → Modify your VS 2022 install.
-
-Check:
-
-Desktop development with C++
-
-C++ CMake tools for Windows
-
-Modify → Let it finish.
-
-B. Windows: bootstrap the Python stack (venv, TTS, STT, GGUF)
-
-Do this from the repo root in PowerShell (not CMD). These create a .venv, install deps, verify TTS/STT, and fetch a TinyLlama GGUF.
-
-B1) Create the scripts (one paste)
-# From repo root
-New-Item -ItemType Directory -Force -Path .\scripts | Out-Null
-
-@'
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
-# --- venv ---
-if (-not (Test-Path .\.venv\Scripts\Activate.ps1)) { py -3 -m venv .venv }
-. .\.venv\Scripts\Activate.ps1
-
-# --- deps ---
+# 3) Install baseline Python deps
 python -m pip install --upgrade pip
 python -m pip install -r .\python\requirements.txt
+
+# 4) Install runtime pieces into THIS venv (TTS, STT, model hub tools)
 python -m pip install piper-tts vosk huggingface_hub llama-cpp-python
 
-# --- assets present checks (bundled) ---
-$VoskZip = ".\assets\vosk-small-en-us.zip"
-$VoskDir = ".\assets\vosk-model-small-en-us-0.15"
-if (-not (Test-Path $VoskDir)) {
-  if (-not (Test-Path $VoskZip)) { throw "Missing $VoskZip" }
-  Expand-Archive -LiteralPath $VoskZip -DestinationPath .\assets -Force
+# 5) (First-run only) Expand the bundled Vosk model if the folder isn't present
+if (-not (Test-Path .\assets\vosk-model-small-en-us-0.15) -and (Test-Path .\assets\vosk-small-en-us.zip)) {
+  Expand-Archive -LiteralPath .\assets\vosk-small-en-us.zip -DestinationPath .\assets -Force
 }
-$Voice = ".\assets\piper\en_US-amy-medium.onnx"
-$Cfg   = ".\assets\piper\en_US-amy-medium.onnx.json"
-if (-not (Test-Path $Voice)) { throw "Missing voice $Voice" }
-if (-not (Test-Path $Cfg))   { throw "Missing config $Cfg" }
 
-# --- GGUF fetch (TinyLlama) ---
-$py = @"
-import os, shutil, fnmatch
-from pathlib import Path
-from huggingface_hub import snapshot_download
+# 6) Generate a WAV with Piper (sanity check TTS)
+$voice = ".\assets\piper\en_US-amy-medium.onnx"
+$cfg   = ".\assets\piper\en_US-amy-medium.onnx.json"
+"Hello class, welcome to TinyLlama!" | & .\.venv\Scripts\piper.exe -m $voice -c $cfg -f hello_class.wav
+Get-Item .\hello_class.wav | Format-List Name,Length,LastWriteTime
 
-DEST = Path(r"assets\TinyLlama-1.1B-Chat.Q4_K_M.gguf")
-DEST.parent.mkdir(parents=True, exist_ok=True)
-
-def pick_file(root: Path, patterns, min_bytes=100_000_000):
-    cands=[]
-    for p in root.rglob("*.gguf"):
-        for pat in patterns:
-            if fnmatch.fnmatch(p.name.lower(), pat.lower()):
-                if p.stat().st_size >= min_bytes:
-                    cands.append(p); break
-    return min(cands, key=lambda p: p.stat().st_size) if cands else None
-
-attempts = [
-    dict(repo_id="TinyLlama/TinyLlama-1.1B-Chat-v1.0-GGUF", use_token=True),
-    dict(repo_id="TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", use_token=False),
-    dict(repo_id="bartowski/TinyLlama-1.1B-Chat-v1.0-GGUF", use_token=False),
-]
-patterns = ["*q4_k_m.gguf","*q4_0.gguf","*q3_k_m.gguf","*q3_k_l.gguf"]
-token = os.getenv("HUGGINGFACE_HUB_TOKEN","citl")
-
-if not (DEST.exists() and DEST.stat().st_size >= 100_000_000):
-    last_err=None
-    for att in attempts:
-        try:
-            cache = snapshot_download(repo_id=att["repo_id"],
-                                      token=(token if att["use_token"] else None),
-                                      allow_patterns=["*.gguf"])
-            pick = pick_file(Path(cache), patterns)
-            if not pick: raise FileNotFoundError("no matching GGUF")
-            if pick.resolve() != DEST.resolve():
-                shutil.copy2(pick, DEST)
-            if DEST.stat().st_size < 100_000_000: raise ValueError("file too small")
-            break
-        except Exception as e:
-            last_err=e
-    if not DEST.exists():
-        raise SystemExit(f"Failed to fetch GGUF: {last_err}")
-print("GGUF OK:", DEST, DEST.stat().st_size, "bytes")
-"@
-Set-Content -LiteralPath .\scripts\_fetch_llm.py -Value $py -Encoding UTF8
-python .\scripts\_fetch_llm.py
-Remove-Item .\scripts\_fetch_llm.py -Force
-
-# --- one-shot TTS + STT sanity ---
-"Hello class, welcome to TinyLlama!" | & .\.venv\Scripts\piper.exe -m $Voice -c $Cfg -f hello_class.wav
-if (-not (Test-Path .\hello_class.wav)) { throw "TTS failed to produce hello_class.wav" }
-
-$stt = @"
-import wave, json
-from vosk import Model, KaldiRecognizer
-wf = wave.open(r'hello_class.wav','rb')
-rec = KaldiRecognizer(Model(r'__VOSK_DIR__'), wf.getframerate()); rec.SetWords(True)
-while True:
-    d = wf.readframes(4000)
-    if not d: break
-    rec.AcceptWaveform(d)
-print('STT:', json.loads(rec.FinalResult()).get('text','<none>'))
-"@
-$stt = $stt -replace '__VOSK_DIR__', ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($VoskDir))
-Set-Content -LiteralPath .\scripts\_stt_run.py -Value $stt -Encoding UTF8
-python .\scripts\_stt_run.py
-Remove-Item .\scripts\_stt_run.py -Force
-
-Write-Host "== windows_bootstrap.ps1 finished OK ==" -ForegroundColor Green
-'@ | Set-Content .\scripts\windows_bootstrap.ps1 -Encoding UTF8
-
-@'
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-. .\.venv\Scripts\Activate.ps1
-
-$Voice = ".\assets\piper\en_US-amy-medium.onnx"
-$Cfg   = ".\assets\piper\en_US-amy-medium.onnx.json"
+# 7) Transcribe that WAV with Vosk (sanity check STT)
 $VoskDir = ".\assets\vosk-model-small-en-us-0.15"
-
-"Test line for smoke check." | & .\.venv\Scripts\piper.exe -m $Voice -c $Cfg -f hello_class.wav
-(Get-Item .\hello_class.wav | Select-Object Name,Length,LastWriteTime) | Format-List
-
-$stt = @"
-import wave, json
-from vosk import Model, KaldiRecognizer
-wf = wave.open(r'hello_class.wav','rb')
-rec = KaldiRecognizer(Model(r'__VOSK_DIR__'), wf.getframerate()); rec.SetWords(True)
-while True:
-    d = wf.readframes(4000)
-    if not d: break
-    rec.AcceptWaveform(d)
-print('STT:', json.loads(rec.FinalResult()).get('text','<none>'))
-"@
-$stt = $stt -replace '__VOSK_DIR__', ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($VoskDir))
-Set-Content -LiteralPath .\scripts\_stt_run.py -Value $stt -Encoding UTF8
-python .\scripts\_stt_run.py
-Remove-Item .\scripts\_stt_run.py -Force
-
-Write-Host "== windows_smoke.ps1 finished OK ==" -ForegroundColor Green
-'@ | Set-Content .\scripts\windows_smoke.ps1 -Encoding UTF8
-
-B2) Run the bootstrap
-Set-ExecutionPolicy -Scope Process Bypass -Force
-.\scripts\windows_bootstrap.ps1
-
-B3) Re-run smoke any time
-.\scripts\windows_smoke.ps1
-
-C. Where to start coding (pick your stack)
-C1) Python — TTS (Piper)
-. .\.venv\Scripts\Activate.ps1
-python apps\python_tts\piper_say.py
-
-
-Edit apps/python_tts/piper_say.py to change the text/voice (the voice files already live in assets/piper/).
-
-C2) Python — Live captions (Vosk)
-. .\.venv\Scripts\Activate.ps1
-python apps\accessibility\live_captions_vosk.py
-
-
-Starts microphone STT. Tweak model path or chunk sizes inside the script if you like.
-
-C3) Python — TinyLlama local LLM
-. .\.venv\Scripts\Activate.ps1
-python - << 'PY'
-from llama_cpp import Llama
-llm = Llama(model_path="assets/TinyLlama-1.1B-Chat.Q4_K_M.gguf", n_ctx=512, n_threads=4, verbose=False)
-out = llm("Hello class! Brief greeting:", max_tokens=32, temperature=0.6)
-print(out["choices"][0]["text"].strip())
-PY
-
-
-Use as a building block for chat/assist features.
-
-C4) Python — Translate (offline, Argos)
-. .\.venv\Scripts\Activate.ps1
-python apps\accessibility\translate_argos.py
-
-
-If a model download is prompted the first run, follow the command-line prompt in that script (it’s prepared for Argos Translate).
-
-C5) C/C++ — build & run in Visual Studio
-
-Visual Studio → File → Open → Folder… and select the repo root.
-
-Wait for “CMake generation finished”.
-
-Build toolbar:
-
-Configure Preset: windows-default (or whatever VS offers by default)
-
-Build → Build All
-
-Run target rpi_demo from CMake Targets view.
-
-If you prefer command-line CMake later: install CMake, then:
-
-cmake -S . -B build
-cmake --build build -j
-.\build\rpi_demo.exe
-
-D. Sample “complete stacks” your team can demo today
-D1) Text → Speech → Transcript (TTS + STT)
-. .\.venv\Scripts\Activate.ps1
-"Stakeholder demo: this is a round trip." | & .\.venv\Scripts\piper.exe -m .\assets\piper\en_US-amy-medium.onnx -c .\assets\piper\en_US-amy-medium.onnx.json -f out.wav
-
-python - << 'PY'
-import wave, json
-from vosk import Model, KaldiRecognizer
-wf = wave.open("out.wav","rb")
-rec = KaldiRecognizer(Model(r"assets/vosk-model-small-en-us-0.15"), wf.getframerate()); rec.SetWords(True)
-while True:
-    d = wf.readframes(4000)
-    if not d: break
-    rec.AcceptWaveform(d)
-print("TRANSCRIPT:", json.loads(rec.FinalResult()).get("text","<none>"))
-PY
-
-D2) Live captions + TinyLlama “prompt assist”
-. .\.venv\Scripts\Activate.ps1
-python - << 'PY'
-import wave, sys, json
-from vosk import Model, KaldiRecognizer
-from llama_cpp import Llama
-
-llm = Llama(model_path="assets/TinyLlama-1.1B-Chat.Q4_K_M.gguf", n_ctx=512, n_threads=4, verbose=False)
-
-# simple: transcribe an existing WAV then summarize with LLM
-wf = wave.open("hello_class.wav","rb")
-rec = KaldiRecognizer(Model(r"assets/vosk-model-small-en-us-0.15"), wf.getframerate()); rec.SetWords(True)
-while True:
-    d = wf.readframes(4000)
-    if not d: break
-    rec.AcceptWaveform(d)
-text = json.loads(rec.FinalResult()).get("text","<none>")
-print("ASR:", text)
-summary = llm(f"Summarize in one sentence: {text}", max_tokens=48, temperature=0.2)["choices"][0]["text"].strip()
-print("LLM summary:", summary)
-PY
-
-D3) “Hello, stakeholders!” minimal demo app (Python)
-. .\.venv\Scripts\Activate.ps1
-mkdir -Force apps\python_hello | Out-Null
 @'
-from datetime import datetime
-print("Hello, stakeholders!")
-print("Timestamp:", datetime.now().isoformat(timespec="seconds"))
-'@ | Set-Content apps\python_hello\hello_stakeholders.py
-python apps\python_hello\hello_stakeholders.py
+import wave, json
+from vosk import Model, KaldiRecognizer
+wf = wave.open("hello_class.wav","rb")
+rec = KaldiRecognizer(Model(r"""__VOSK_DIR__"""), wf.getframerate()); rec.SetWords(True)
+while True:
+    d = wf.readframes(4000)
+    if not d: break
+    rec.AcceptWaveform(d)
+print("STT:", json.loads(rec.FinalResult()).get("text","<none>"))
+'@ -replace '__VOSK_DIR__', ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($VoskDir)) |
+Set-Content _stt_run.py -Encoding UTF8
+python .\_stt_run.py
+Remove-Item .\_stt_run.py -Force
 
-E. Move your project to the CanaKit Raspberry Pi
-
-Two reliable paths: (1) Git pull on the Pi (recommended), or (2) copy over via scp.
-
-E1) On the Pi — first-time setup
-
-SSH into the Pi (replace hostname/ip):
-
-ssh pi@raspberrypi.local
-# or: ssh pi@<pi-ip-address>
+# 8) (Optional first run) Fetch a TinyLlama GGUF automatically when apps ask for it
+# The code will try public mirrors; if you set a token, it will use it.
+$env:HUGGINGFACE_HUB_TOKEN = "citl"   # literal 'citl' is accepted by our scripts
 
 
-Then:
+Where to put your own code (Windows):
 
+Python apps: apps/python_* (see examples inside the repo)
+
+Your first demo script example is included: apps/python_hello/hello_stakeholders.py
+
+Run them with:
+
+python .\apps\python_hello\hello_stakeholders.py
+
+Quick Start — Raspberry Pi (bookworm, 64-bit)
+# 0) System packages
 sudo apt-get update
-sudo apt-get install -y git python3-venv python3-pip
+sudo apt-get install -y python3-venv git cmake alsa-utils
+
+# 1) Code + venv
 git clone https://github.com/Citl-Dev-Ops/citl-raspi-starter.git
 cd citl-raspi-starter
 python3 -m venv .venv
-. .venv/bin/activate
+source .venv/bin/activate
+
+# 2) Python deps (baseline + runtime)
 python -m pip install --upgrade pip
 python -m pip install -r python/requirements.txt
 python -m pip install piper-tts vosk huggingface_hub llama-cpp-python
-# expand the bundled Vosk model if not already expanded
-if [ -f assets/vosk-small-en-us.zip ] && [ ! -d assets/vosk-model-small-en-us-0.15 ]; then
-  python - <<'PY'
-import zipfile, os
-z="assets/vosk-small-en-us.zip"
-with zipfile.ZipFile(z) as zf:
-    zf.extractall("assets")
-print("Vosk extracted")
-PY
-fi
-# Fetch TinyLlama GGUF (same logic as Windows; token optional)
-export HUGGINGFACE_HUB_TOKEN=citl
-python - <<'PY'
-import os, shutil, fnmatch
-from pathlib import Path
-from huggingface_hub import snapshot_download
 
-DEST = Path("assets/TinyLlama-1.1B-Chat.Q4_K_M.gguf")
-DEST.parent.mkdir(parents=True, exist_ok=True)
+# 3) (First run) audio devices
+arecord -l
+aplay -l
 
-def pick_file(root: Path, patterns, min_bytes=100_000_000):
-    cands=[]
-    for p in root.rglob("*.gguf"):
-        for pat in patterns:
-            if fnmatch.fnmatch(p.name.lower(), pat.lower()):
-                if p.stat().st_size >= min_bytes:
-                    cands.append(p); break
-    return min(cands, key=lambda p: p.stat().st_size) if cands else None
+# 4) Smoke tests
+python apps/python_tts/piper_say.py          # generates a WAV via Piper
+python apps/accessibility/live_captions_vosk.py  # live captions in terminal
+python apps/python_llm/llm_echo.py           # TinyLlama test (fetches GGUF if needed)
 
-attempts = [
-    dict(repo_id="TinyLlama/TinyLlama-1.1B-Chat-v1.0-GGUF", use_token=True),
-    dict(repo_id="TheBloke/TinyLlama-1.1B-Chat-v1.0-GGUF", use_token=False),
-    dict(repo_id="bartowski/TinyLlama-1.1B-Chat-v1.0-GGUF", use_token=False),
-]
-patterns = ["*q4_k_m.gguf","*q4_0.gguf","*q3_k_m.gguf","*q3_k_l.gguf"]
-token = os.getenv("HUGGINGFACE_HUB_TOKEN","citl")
 
-if not (DEST.exists() and DEST.stat().st_size >= 100_000_000):
-    last_err=None
-    for att in attempts:
-        try:
-            cache = snapshot_download(repo_id=att["repo_id"],
-                                      token=(token if att["use_token"] else None),
-                                      allow_patterns=["*.gguf"])
-            pick = pick_file(Path(cache), patterns)
-            if not pick: raise FileNotFoundError("no matching GGUF")
-            if pick.resolve() != DEST.resolve():
-                shutil.copy2(pick, DEST)
-            if DEST.stat().st_size < 100_000_000: raise ValueError("file too small")
-            break
-        except Exception as e:
-            last_err=e
-    if not DEST.exists():
-        raise SystemExit(f"Failed to fetch GGUF: {last_err}")
-print("GGUF OK:", DEST, DEST.stat().st_size, "bytes")
-PY
+The repo’s helper (scripts/fix_all.sh) can also fetch a GGUF automatically on Linux/WSL. On Windows, the PowerShell steps above are clearer for domain machines.
 
-Quick Pi smoke
-. .venv/bin/activate
-echo "Hello Pi from Piper." | piper -m assets/piper/en_US-amy-medium.onnx -c assets/piper/en_US-amy-medium.onnx.json -f hello_pi.wav
-python - <<'PY'
-import wave, json
+Developing your first app
+A. Python: “voice in → answer → voice out”
+
+Use apps/python_llm/llm_echo.py and apps/python_tts/piper_say.py as references. A minimal skeleton:
+
+# apps/python_llm/my_voice_assistant.py
+import json, wave, sys
 from vosk import Model, KaldiRecognizer
-wf = wave.open("hello_pi.wav","rb")
-rec = KaldiRecognizer(Model("assets/vosk-model-small-en-us-0.15"), wf.getframerate()); rec.SetWords(True)
+from llama_cpp import Llama
+import subprocess, os
+
+VOSK_DIR = "assets/vosk-model-small-en-us-0.15"
+GGUF    = "assets/TinyLlama-1.1B-Chat.Q4_K_M.gguf"
+VOICE   = "assets/piper/en_US-amy-medium.onnx"
+CFG     = "assets/piper/en_US-amy-medium.onnx.json"
+
+# 1) capture/ingest speech (for a quick demo, reuse hello_class.wav)
+wf  = wave.open("hello_class.wav","rb")
+rec = KaldiRecognizer(Model(VOSK_DIR), wf.getframerate()); rec.SetWords(True)
 while True:
     d = wf.readframes(4000)
     if not d: break
     rec.AcceptWaveform(d)
-print("Pi TRANSCRIPT:", json.loads(rec.FinalResult()).get("text","<none>"))
-PY
+user_text = json.loads(rec.FinalResult()).get("text","").strip() or "say a greeting to our class"
+print("USER:", user_text)
 
-E2) Keep Pi in sync (choose one)
+# 2) run TinyLlama
+llm = Llama(model_path=GGUF, n_ctx=512, n_threads=4, verbose=False)
+resp = llm(f"Brief, friendly, K-12 safe answer: {user_text}", max_tokens=64, temperature=0.6)
+bot_text = resp["choices"][0]["text"].strip()
+print("BOT :", bot_text)
 
-Option A — Pull from GitHub on the Pi
-
-cd ~/citl-raspi-starter
-git pull
-. .venv/bin/activate
-python -m pip install -r python/requirements.txt
-
-
-Option B — Copy from Windows to Pi (scp)
-
-# From Windows PowerShell, repo root:
-scp -r * pi@raspberrypi.local:~/citl-raspi-starter/
-
-F. What staff should open/edit
-
-Python apps → apps/python_tts/, apps/accessibility/, apps/python_hello/
-
-LLM usage → import llama_cpp.Llama and point model_path to assets/TinyLlama-1.1B-Chat.Q4_K_M.gguf
-
-C/C++ apps → source in src/ and apps/c_hello/; build with Visual Studio CMake integration.
-
-G. Daily workflow (Windows)
-# 1) Pull latest
-git pull
-
-# 2) Activate venv
-. .\.venv\Scripts\Activate.ps1
-
-# 3) (Only if requirements changed)
-python -m pip install -r .\python\requirements.txt
-
-# 4) Run your app(s)
-python apps\python_tts\piper_say.py
-python apps\accessibility\live_captions_vosk.py
-python apps\python_hello\hello_stakeholders.py
-
-# 5) Commit and push
-git add -A
-git commit -m "Work in progress: <your message>"
-git push
-
-H. Common fixes
-
-Execution policy error → run:
-
-Set-ExecutionPolicy -Scope Process Bypass -Force
+# 3) speak with Piper
+p = subprocess.Popen(
+    ["piper", "-m", VOICE, "-c", CFG, "-f", "reply.wav"],
+    stdin=subprocess.PIPE, text=True
+)
+p.communicate(bot_text)
+print("WAV : reply.wav")
 
 
-Piper not found → you’re not in the venv. Run:
+Run it:
 
-. .\.venv\Scripts\Activate.ps1
+# Windows (PowerShell)
+.\.venv\Scripts\Activate.ps1
+python .\apps\python_llm\my_voice_assistant.py
+
+# Pi / Linux
+source .venv/bin/activate
+python apps/python_llm/my_voice_assistant.py
+
+B. C (optional): build & run
+# Pi / WSL bash only (CMake)
+mkdir -p build
+cmake -S . -B build
+cmake --build build -j
+./build/rpi_demo
 
 
-Vosk “model not found” → ensure the folder exists:
+On native Windows cmd/PowerShell (without MSYS/CMake), stick to Python apps.
 
-Test-Path .\assets\vosk-model-small-en-us-0.15
+Models & assets (what lives where)
+
+Vosk model (offline STT): assets/vosk-model-small-en-us-0.15/
+(A zip assets/vosk-small-en-us.zip is included for machines that need to expand it.)
+
+Piper voice + config (offline TTS):
+assets/piper/en_US-amy-medium.onnx and .json
+
+TinyLlama GGUF (offline LLM): fetched on first LLM run to
+assets/TinyLlama-1.1B-Chat.Q4_K_M.gguf
+(Our fetcher tries public mirrors; if you export HUGGINGFACE_HUB_TOKEN=citl, it will attempt the official path first.)
+
+Troubleshooting (fast)
+
+PowerShell prints Python code errors: You pasted Python into PS. Save to a .py file (see STT block above) then python file.py.
+
+piper.exe not found: Ensure you installed piper-tts inside your venv and ran .\.venv\Scripts\Activate.ps1.
+
+Windows Defender pop-up: First-run executable (e.g., piper.exe) triggered Smartscreen. Choose Allow for the signed package you installed via pip.
+
+No audio devices: On Pi, check arecord -l and aplay -l. On Windows, use USB mic/speaker or set default device in Sound Settings.
+
+STT path error (“Folder … not found”): Use the absolute path to assets/vosk-model-small-en-us-0.15 (the STT helper snippet does this automatically).
+
+CMake not found in PowerShell: Build C samples on Pi/WSL; Windows Python apps need no CMake.
+
+What counts as “done” for a cohort demo
+
+You can run:
+
+python apps/python_tts/piper_say.py → produces a WAV.
+
+The STT snippet → prints “STT: …” for your WAV.
+
+python apps/python_llm/llm_echo.py → returns a TinyLlama response.
+
+Your custom script (e.g., my_voice_assistant.py) produces a spoken reply.
+
+It keeps working offline for an entire class block without thermal throttling.
+
+Hand-off to the classroom Pi
+
+Push your app code to GitHub (this repo or fork).
+
+On the Pi, clone/pull, activate the venv, and install deps as in Quick Start — Raspberry Pi.
+
+Plug in mic/speaker, verify audio, run your app.
+
+For kiosk use, add your app’s launch command to a systemd user service or LXDE autostart.
+
+Contributing
+
+Keep additions fully offline and CPU-friendly.
+
+Place new Python demos under apps/python_*.
+
+Use the existing assets folder structure.
+
+One-liner smoke tests (Windows & Pi)
+
+Windows (PowerShell):
+
+# From repo root
+.\.venv\Scripts\Activate.ps1
+"Hello from Piper!" | & .\.venv\Scripts\piper.exe -m .\assets\piper\en_US-amy-medium.onnx -c .\assets\piper\en_US-amy-medium.onnx.json -f hello_class.wav
 
 
-TinyLlama GGUF missing → rerun:
+Raspberry Pi (bash):
 
-$env:HUGGINGFACE_HUB_TOKEN="citl"   # or leave unset
-.\scripts\windows_bootstrap.ps1
+# From repo root
+source .venv/bin/activate
+python apps/accessibility/live_captions_vosk.py
+
+
+License & Acknowledgments
+This starter integrates the great work of the Vosk (STT), Piper (TTS), and TinyLlama communities, packaged for predictable classroom deployments on Raspberry Pi.
